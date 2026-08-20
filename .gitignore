@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 运行产物（不提交）
+data/
+generated/
+dist/
+*.whl
+
+# 环境与密钥
+.env
+*.env
+
+# 测试与日志
+.pytest_cache/
+.coverage
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# 构建产物
+build/
