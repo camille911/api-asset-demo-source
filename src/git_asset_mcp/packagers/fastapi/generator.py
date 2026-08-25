@@ -70,21 +70,50 @@ def _closure_info(entry_path: str) -> tuple[str, str, str]:
     pkg_dir = "/".join(parts[:-1])
     package_name = pkg_dir.split("/")[-1]
     filename = parts[-1]
-    submodule = filename[:-3] if filename.endswith(".py") else filename
+    # __init__.py 作为入口时，import 目标是包本身（openai），而非 openai.__init__
+    if filename == "__init__.py":
+        submodule = ""
+    else:
+        submodule = filename[:-3] if filename.endswith(".py") else filename
     import_module = f"{package_name}.{submodule}" if submodule else package_name
     return pkg_dir, package_name, import_module
 
 
 def _resolve_import_target(
     module_name: str | None, pkg_dir: str, package_name: str, tree: set[str],
+    current_path: str = "", level: int = 0,
 ) -> str | None:
     """Resolve a same-package import to a repo file path inside ``tree``.
 
-    Handles ``import legacy_checkout.pricing`` and
-    ``from legacy_checkout.discount import dsc`` (absolute, same package).
-    Returns ``None`` for third-party / relative / out-of-package imports.
+    Handles ``import legacy_checkout.pricing`` /
+    ``from legacy_checkout.discount import dsc`` (absolute, same package)
+    and relative imports (``level > 0``, e.g. ``from .assistants import x``
+    resolves against the current file's package directory, so nested
+    subpackages work too). Returns ``None`` for third-party /
+    out-of-package imports.
     """
-    if not module_name or not module_name.startswith(package_name):
+    if not module_name:
+        return None
+    if level > 0:
+        # 相对导入：AST 中 module 已去掉点前缀，level 表示向上层级
+        rest = module_name.strip(".")
+        cur_dir = "/".join(current_path.replace("\\", "/").split("/")[:-1])
+        if current_path.endswith("__init__.py"):
+            base = cur_dir
+        else:
+            base = "/".join(cur_dir.split("/")[:-1]) if "/" in cur_dir else ""
+        for _ in range(max(level - 1, 0)):
+            base = "/".join(base.split("/")[:-1]) if "/" in base else ""
+        rel_parts = [p for p in rest.split(".") if p]
+        if not rel_parts:
+            return None
+        leaf = rel_parts[-1]
+        parent = "/".join([base] + rel_parts[:-1]) if len(rel_parts) > 1 else base
+        for cand in (f"{parent}/{leaf}.py", f"{parent}/{leaf}/__init__.py"):
+            if cand in tree:
+                return cand
+        return None
+    if not module_name.startswith(package_name):
         return None
     rel = module_name[len(package_name):].strip(".")
     parts = [p for p in rel.split(".") if p]
@@ -131,12 +160,12 @@ def _package_closure(
             target: str | None = None
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    target = _resolve_import_target(alias.name, pkg_dir, package_name, set(tree))
+                    target = _resolve_import_target(alias.name, pkg_dir, package_name, set(tree), path)
                     if target and target not in want:
                         want.add(target)
                         queue.append(target)
             elif isinstance(node, ast.ImportFrom) and node.module:
-                target = _resolve_import_target(node.module, pkg_dir, package_name, set(tree))
+                target = _resolve_import_target(node.module, pkg_dir, package_name, set(tree), path, getattr(node, "level", 0))
                 if target and target not in want:
                     want.add(target)
                     queue.append(target)
@@ -147,11 +176,15 @@ def _package_closure(
 
     files: dict[str, str] = {}
     blob_shas: list[str] = []
+    # 入口文件本身是包的 __init__.py 时（如 openai/__init__.py 定义入口函数），
+    # 保留包内全部 __init__.py 原文件——re-export 链依赖子包符号，
+    # 最小化会导致 import 断链。
+    preserve_all_init = entry_path.endswith("__init__.py")
     for path in sorted(want):
         rel = path[len(pkg_dir) + 1:]
-        if path.endswith("__init__.py"):
-            # 最小化包 __init__：原文件的 re-export 会触发全量子模块依赖，
-            # 文件级闭包只装入口子模块，故用生成的空 init 保持包结构。
+        if path.endswith("__init__.py") and not preserve_all_init and path != entry_path:
+            # 非入口包 __init__ 最小化：原文件的 re-export 会触发全量子模块
+            # 依赖，文件级闭包只装入口子模块，故用生成的空 init 保持包结构。
             # 该文件是模板产物，不纳入源码指纹（blob_shas）。
             files[f"{package_name}/{rel}"] = _MINIMAL_INIT
         else:
@@ -373,7 +406,8 @@ def _render_adapter(import_module: str, func_name: str, params: list[tuple[str, 
                 call_args.append(f'        {name}=p["{name}"],')
             else:
                 call_args.append(f'        {name}=p.get("{name}", {default}),')
-        body = "\n".join(call_args) or "        pass"
+        # 零参数函数：body 为空，生成无参调用 func()
+        body = "\n".join(call_args)
     return (
         '"""Adapter: maps the stable API payload to the legacy function."""\n'
         f"from {import_module} import {func_name}\n\n"
