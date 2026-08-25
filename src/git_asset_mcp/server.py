@@ -13,6 +13,7 @@ from git_asset_mcp import __version__
 from git_asset_mcp.app import AppContext
 from git_asset_mcp.tools.package_tools import register_package_tools
 from git_asset_mcp.tools.proposal_tools import register_proposal_tools
+from git_asset_mcp.tools.rag_tools import register_rag_tools
 from git_asset_mcp.tools.repository_tools import register_repository_tools
 from git_asset_mcp.tools.scan_tools import register_scan_tools
 
@@ -23,6 +24,7 @@ register_repository_tools(mcp, ctx)
 register_scan_tools(mcp, ctx)
 register_proposal_tools(mcp, ctx)
 register_package_tools(mcp, ctx)
+register_rag_tools(mcp, ctx)
 
 
 class ServerInfo(BaseModel):

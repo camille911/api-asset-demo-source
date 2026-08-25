@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from git_asset_mcp.analyzers.python.inventory import scan_repository
 from git_asset_mcp.analyzers.python.module_detector import detect_modules
 from git_asset_mcp.app import AppContext
+from git_asset_mcp.rag.indexer import index_repository
 
 
 class ModuleSummary(BaseModel):
@@ -28,6 +29,7 @@ class ScanResult(BaseModel):
     files_failed: int
     symbols_total: int
     modules: list[ModuleSummary]
+    rag_indexed: bool = False
 
 
 def register_scan_tools(mcp: Any, ctx: AppContext) -> None:
@@ -36,13 +38,22 @@ def register_scan_tools(mcp: Any, ctx: AppContext) -> None:
         """Scan a repository at ``ref`` and persist symbols/modules to the store.
 
         Fetches the latest commit, resolves it to a full SHA, runs the Python
-        AST analyzer, then detects candidate modules. Returns a summary plus
-        the module list. Requires ``repository_register`` first.
+        AST analyzer, then detects candidate modules. Automatically builds
+        the RAG semantic index for the scanned contracts. Returns a summary
+        plus the module list. Requires ``repository_register`` first.
         """
         ctx.provider.fetch(repo_id)
         commit = ctx.provider.resolve_commit(repo_id, ref)
         scan = scan_repository(ctx.provider, ctx.db, repo_id, commit)
         modules = detect_modules(ctx.db, repo_id, commit)
+        rag_indexed = False
+        if scan["symbols_total"] > 0:
+            try:
+                index_repository(ctx.db, repo_id, commit)
+                rag_indexed = True
+            except Exception:
+                # 语义索引失败不阻断扫描（embedding 模型缺失时降级）
+                rag_indexed = False
         return ScanResult(
             commit=commit,
             files_total=scan["files_total"],
@@ -50,6 +61,7 @@ def register_scan_tools(mcp: Any, ctx: AppContext) -> None:
             files_failed=scan["files_failed"],
             symbols_total=scan["symbols_total"],
             modules=[ModuleSummary(**m) for m in modules],
+            rag_indexed=rag_indexed,
         )
 
     @mcp.tool()

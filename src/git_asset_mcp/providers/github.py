@@ -1,6 +1,7 @@
 """GitHub provider implemented on top of the git CLI (no shell=True)."""
 from __future__ import annotations
 
+import base64
 import subprocess
 from pathlib import Path
 
@@ -40,7 +41,11 @@ class GithubProvider(RepositoryProvider):
     def _git(self, args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
         cmd = ["git"]
         if self._token:
-            cmd += ["-c", f"http.extraHeader=Authorization: Bearer {self._token}"]
+            # Basic auth with a dummy username: works for classic PATs (ghp_),
+            # fine-grained PATs (github_pat_) and gh CLI OAuth tokens (gho_).
+            # Bearer is rejected by GitHub for gho_ tokens.
+            auth = base64.b64encode(f"x-access-token:{self._token}".encode("utf-8")).decode("ascii")
+            cmd += ["-c", f"http.extraHeader=Authorization: Basic {auth}"]
         cmd += args
         return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
 

@@ -104,6 +104,37 @@ CREATE TABLE IF NOT EXISTS artifacts (
     created_at TEXT NOT NULL,
     entry_symbols TEXT
 );
+
+CREATE TABLE IF NOT EXISTS rag_contracts (
+    contract_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    symbol_qname TEXT NOT NULL,
+    symbol_type TEXT NOT NULL,
+    module_name TEXT NOT NULL,
+    api_name TEXT,
+    path TEXT NOT NULL,
+    signature TEXT,
+    docstring TEXT,
+    language TEXT DEFAULT 'python',
+    contract_json TEXT,
+    artifact_id TEXT,
+    wheel_path TEXT,
+    contract_hash TEXT,
+    indexed_at TEXT NOT NULL,
+    UNIQUE (repo_id, commit_sha, symbol_qname)
+);
+
+CREATE TABLE IF NOT EXISTS rag_chunks (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contract_id INTEGER NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding BLOB,
+    UNIQUE (contract_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_contract ON rag_chunks (contract_id);
 """
 
 

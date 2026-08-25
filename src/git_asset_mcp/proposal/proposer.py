@@ -17,6 +17,22 @@ def _public_entry(symbol_type: str, qualified_name: str) -> bool:
     return not leaf.startswith("_") and symbol_type in ("function", "method")
 
 
+def _select_entry(entries: list[dict], entry_symbol: str) -> dict:
+    """Pick the target entry by exact or suffix symbol match.
+
+    Defaults to ``entries[0]`` (first public function) when no symbol is
+    given, preserving the legacy behaviour. Raises when an explicit symbol
+    cannot be matched.
+    """
+    if not entry_symbol:
+        return entries[0]
+    for e in entries:
+        qname = e["qualified_name"]
+        if qname == entry_symbol or qname.endswith("." + entry_symbol):
+            return e
+    raise ValueError(f"entry_symbol {entry_symbol!r} not found in module")
+
+
 def _params_from_signature(signature: str) -> list[str]:
     m = re.search(r"\((.*)\)", signature)
     if not m:
@@ -44,8 +60,15 @@ def propose_api(
     commit: str,
     module_name: str,
     target_capability: str = "",
+    entry_symbol: str = "",
 ) -> ApiProposal:
-    """Generate a deterministic API proposal for a module's public entry points."""
+    """Generate a deterministic API proposal for a module's public entry points.
+
+    ``entry_symbol`` optionally selects which public function becomes the API
+    entry (exact or leaf-suffix match). Without it, the first public function
+    is used (legacy behaviour). The selected entry is placed first in
+    ``entry_symbols`` so packaging targets it.
+    """
     rows = db._conn.execute(
         """
         SELECT s.qualified_name, s.symbol_type, s.signature, f.path
@@ -65,7 +88,8 @@ def propose_api(
     if not entries:
         raise ValueError(f"no public entry symbols found for module {module_name!r}")
 
-    entry = entries[0]
+    entry = _select_entry(entries, entry_symbol)
+    ordered = [entry] + [e for e in entries if e is not entry]
     leaf = entry["qualified_name"].split(".")[-1]
     api_name = target_capability or leaf
     capability = target_capability or leaf
@@ -80,7 +104,7 @@ def propose_api(
         response_schema=_response_schema(entry["signature"]),
         error_model={"error": {"type": "object", "properties": {"detail": {"type": "string"}}}},
         source_paths=sorted({r["path"] for r in entries}),
-        entry_symbols=[r["qualified_name"] for r in entries],
+        entry_symbols=[e["qualified_name"] for e in ordered],
         adapter_needed=True,
         risks=[
             "deterministic proposal: field-level schema is coarse and requires confirmation or LLM enrichment"

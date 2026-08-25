@@ -125,3 +125,115 @@ def test_build_rejects_cross_module_duplicate(scanned, tmp_path):
 
     with pytest.raises(RuntimeError, match="duplicate_asset"):
         build_artifact(proposal, provider, db, "1.0.0", tmp_path / "generated")
+
+
+# ---------------------------------------------------------------------------
+# 方案 B：entry_symbol 入口选择 + 文件级闭包（多功能独立文件）
+# ---------------------------------------------------------------------------
+
+MULTI_SRC = {
+    "customer_id.py": (
+        '"""Customer identifier normalization."""\n'
+        "import re\n"
+        "\n"
+        "def normalize_customer_id(value: str) -> str:\n"
+        '    """Normalize a customer id."""\n'
+        '    return re.sub(r"[\\s-]+", "", value).upper()\n'
+    ),
+    "masking.py": (
+        '"""Sensitive field masking."""\n'
+        "from copy import deepcopy\n"
+        "\n"
+        "def mask_sensitive_fields(payload: dict, fields: set) -> dict:\n"
+        '    """Mask selected fields."""\n'
+        "    return deepcopy(payload)\n"
+    ),
+    "request_signer.py": (
+        '"""Request signing."""\n'
+        "import hmac\n"
+        "\n"
+        "def sign_request(payload: dict, secret: str) -> str:\n"
+        '    """Sign a request."""\n'
+        '    return "sig"\n'
+    ),
+}
+
+
+@pytest.fixture
+def multi_scanned(tmp_path):
+    repo = tmp_path / "source"
+    repo.mkdir()
+    _git(["init", "-q", "-b", "main"], repo)
+    _git(["config", "user.email", "t@e.com"], repo)
+    _git(["config", "user.name", "t"], repo)
+    pkg = repo / "company_shared_api"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    for name, src in MULTI_SRC.items():
+        (pkg / name).write_text(src)
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "init"], repo)
+
+    provider = GithubProvider(data_dir=tmp_path / "data", allow_local_paths=True)
+    ref = provider.register(str(repo), "main")
+    db = Database(tmp_path / "data" / "scan.db")
+    scan_repository(provider, db, ref.repo_id, ref.resolved_commit)
+    return ref, provider, db
+
+
+def _approved_proposal(db, ref, **kwargs):
+    proposal = propose_api(db, ref.repo_id, ref.resolved_commit, "company_shared_api", **kwargs)
+    db.insert_proposal(
+        proposal.proposal_id, proposal.module_id, proposal.model_dump_json(), "approved", "now"
+    )
+    proposal.status = "approved"
+    return proposal
+
+
+def test_proposal_selects_target_entry(multi_scanned):
+    ref, provider, db = multi_scanned
+    prop = propose_api(
+        db, ref.repo_id, ref.resolved_commit, "company_shared_api",
+        entry_symbol="mask_sensitive_fields",
+    )
+    assert prop.api_name == "mask_sensitive_fields"
+    assert prop.entry_symbols[0] == "company_shared_api.masking.mask_sensitive_fields"
+
+
+def test_proposal_defaults_to_first_entry(multi_scanned):
+    ref, provider, db = multi_scanned
+    prop = propose_api(db, ref.repo_id, ref.resolved_commit, "company_shared_api")
+    assert prop.entry_symbols[0] == "company_shared_api.customer_id.normalize_customer_id"
+
+
+def test_proposal_unknown_entry_raises(multi_scanned):
+    ref, provider, db = multi_scanned
+    with pytest.raises(ValueError, match="entry_symbol"):
+        propose_api(
+            db, ref.repo_id, ref.resolved_commit, "company_shared_api",
+            entry_symbol="does_not_exist",
+        )
+
+
+def test_package_file_closure_only_entry_file(multi_scanned, tmp_path):
+    ref, provider, db = multi_scanned
+    prop = _approved_proposal(db, ref, entry_symbol="mask_sensitive_fields")
+    result = build_artifact(prop, provider, db, "1.0.0", tmp_path / "generated")
+    assert result["build_status"] == "ok"
+
+    pkg_out = tmp_path / "generated" / prop.api_name / "1.0.0" / "company_shared_api"
+    assert (pkg_out / "masking.py").exists(), "入口文件应被打包"
+    assert (pkg_out / "__init__.py").exists(), "包 __init__ 应保留"
+    assert not (pkg_out / "customer_id.py").exists(), "无关功能文件不应进入 wheel"
+    assert not (pkg_out / "request_signer.py").exists(), "无关功能文件不应进入 wheel"
+
+
+def test_package_legacy_closure_backward_compatible(scanned, tmp_path):
+    """不传 entry_symbol 时，闭包行为与旧版一致（目录级回退不破坏单文件包）。"""
+    ref, provider, db = scanned
+    prop = _approved(db, ref)
+    result = build_artifact(prop, provider, db, "1.0.0", tmp_path / "generated")
+    assert result["build_status"] == "ok"
+    pkg_out = tmp_path / "generated" / prop.api_name / "1.0.0" / "order_api"
+    assert (pkg_out / "validation.py").exists()
+    assert (pkg_out / "__init__.py").exists()

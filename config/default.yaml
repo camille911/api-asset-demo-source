@@ -19,3 +19,9 @@ llm:
 # 安全上限
 max_file_bytes: 2097152
 max_repo_bytes: 209715200
+
+# RAG 语义检索（可选；模型未就绪自动降级，不影响其余功能）
+# 环境变量优先：RAG_EMBED_MODEL（模型名/路径）、RAG_MODELS_DIR（模型目录）
+rag:
+  embed_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  models_dir: ""   # 空 = 默认 ~/.git-asset/models

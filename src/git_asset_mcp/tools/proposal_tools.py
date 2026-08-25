@@ -19,17 +19,21 @@ def register_proposal_tools(mcp: Any, ctx: AppContext) -> None:
         repo_id: str,
         module_name: str,
         target_capability: str = "",
+        entry_symbol: str = "",
     ) -> ApiProposal:
         """Create an API packaging proposal for a module.
 
-        The proposal starts in ``proposed`` state and must be explicitly
-        approved before packaging. Only public entry symbols are considered.
+        ``entry_symbol`` optionally selects which public function becomes the
+        API entry (exact or leaf-suffix match, e.g. ``mask_sensitive_fields``).
+        Without it, the first public function of the module is used. The
+        proposal starts in ``proposed`` state and must be explicitly approved
+        before packaging. Only public entry symbols are considered.
         """
         commit = ctx.db.get_last_scanned_commit(repo_id)
         if not commit:
             raise ValueError(f"repository {repo_id!r} has not been scanned yet")
 
-        proposal = propose_api(ctx.db, repo_id, commit, module_name, target_capability)
+        proposal = propose_api(ctx.db, repo_id, commit, module_name, target_capability, entry_symbol)
         ctx.db.insert_proposal(
             proposal_id=proposal.proposal_id,
             module_id=proposal.module_id,
