@@ -38,7 +38,12 @@ class GithubProvider(RepositoryProvider):
     def _mirror_path(self, repo_id: str) -> Path:
         return self._repos_dir() / f"{repo_id}.git"
 
-    def _git(self, args: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
+    def _git(
+        self,
+        args: list[str],
+        cwd: str | None = None,
+        binary: bool = False,
+    ) -> subprocess.CompletedProcess:
         cmd = ["git"]
         if self._token:
             # Basic auth with a dummy username: works for classic PATs (ghp_),
@@ -47,7 +52,7 @@ class GithubProvider(RepositoryProvider):
             auth = base64.b64encode(f"x-access-token:{self._token}".encode("utf-8")).decode("ascii")
             cmd += ["-c", f"http.extraHeader=Authorization: Basic {auth}"]
         cmd += args
-        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=not binary)
 
     @staticmethod
     def _ok(proc: subprocess.CompletedProcess) -> bool:
@@ -138,7 +143,9 @@ class GithubProvider(RepositoryProvider):
 
     def read_blob(self, repo_id: str, blob_sha: str) -> str:
         mirror = self._mirror_path(repo_id)
-        proc = self._git(["cat-file", "-p", blob_sha], cwd=str(mirror))
+        proc = self._git(["cat-file", "-p", blob_sha], cwd=str(mirror), binary=True)
         if not self._ok(proc):
-            raise RuntimeError(f"cat-file failed: {proc.stderr.strip()}")
-        return proc.stdout
+            err = proc.stderr.decode("utf-8", "ignore") if proc.stderr else ""
+            raise RuntimeError(f"cat-file failed: {err.strip()}")
+        # 二进制读取 + UTF-8 容错：多语言仓库可能含非 UTF-8 字节（源码/二进制样本）
+        return proc.stdout.decode("utf-8", "ignore")
