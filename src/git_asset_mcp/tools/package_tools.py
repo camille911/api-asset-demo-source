@@ -65,8 +65,10 @@ def register_package_tools(mcp: Any, ctx: AppContext) -> None:
     def api_package_build(proposal_id: str, version: str) -> BuildResult:
         """Package an approved proposal into an immutable version + wheel.
 
-        Only proposals in ``approved`` state can be packaged. Produces a
-        FastAPI service, dependency closure, contract files, and a wheel.
+        Only proposals in ``approved`` state can be packaged. Runtime adapter
+        is chosen automatically from the entry symbol's language: Python ->
+        FastAPI service wheel; C++/CUDA -> pybind11 binding sdist. Produces
+        a service/binding, dependency closure, contract files, and a wheel.
         """
         record = ctx.db.get_proposal(proposal_id)
         if not record:
@@ -75,10 +77,23 @@ def register_package_tools(mcp: Any, ctx: AppContext) -> None:
             raise RuntimeError("proposal_not_approved")
         proposal = ApiProposal.model_validate_json(record["proposal_json"])
         proposal.status = record["status"]
-        built = build_artifact(
-            proposal, ctx.provider, ctx.db, version,
-            ctx.settings.generated_dir, build_wheel=True,
-        )
+
+        repo_id = proposal.module_id.split(":", 1)[0]
+        entry_qname = proposal.entry_symbols[0]
+        commit = ctx.db.get_last_scanned_commit(repo_id) or ""
+        lang = ctx.db.get_symbol_language(repo_id, commit, entry_qname) or "python"
+
+        if lang in ("cpp", "cuda"):
+            from git_asset_mcp.packagers.pybind11 import build_cpp_artifact
+            built = build_cpp_artifact(
+                proposal, ctx.provider, ctx.db, version,
+                ctx.settings.generated_dir, build_sdist=True,
+            )
+        else:
+            built = build_artifact(
+                proposal, ctx.provider, ctx.db, version,
+                ctx.settings.generated_dir, build_wheel=True,
+            )
         return BuildResult(**built)
 
     @mcp.tool()

@@ -399,3 +399,14 @@ class Database:
             (repo_id, commit_sha, qualified_name),
         ).fetchone()
         return row["signature"] if row else None
+
+    def get_symbol_language(self, repo_id: str, commit_sha: str, qualified_name: str) -> str | None:
+        row = self._conn.execute(
+            """
+            SELECT f.language FROM symbols s
+            JOIN files f ON s.file_id = f.file_id
+            WHERE f.repo_id = ? AND f.commit_sha = ? AND s.qualified_name = ?
+            """,
+            (repo_id, commit_sha, qualified_name),
+        ).fetchone()
+        return row["language"] if row else None

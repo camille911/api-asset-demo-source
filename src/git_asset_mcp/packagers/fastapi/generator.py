@@ -237,7 +237,9 @@ def build_artifact(
     if artifact_dir.exists():
         raise RuntimeError("version_exists")
 
-    existing = db.find_artifact_by_symbols(sorted(proposal.entry_symbols))
+    # 防重检查只用实际入口符号（模块 entry_symbols 含全部公开符号，
+    # 用全量找交集会把共享符号的相邻模块误判为重复）
+    existing = db.find_artifact_by_symbols([proposal.entry_symbols[0]])
     if existing and existing.get("module_id") != proposal.module_id:
         raise RuntimeError(f"duplicate_asset: already covered by {existing['artifact_id']}")
 
