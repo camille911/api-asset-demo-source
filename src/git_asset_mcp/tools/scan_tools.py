@@ -37,10 +37,11 @@ def register_scan_tools(mcp: Any, ctx: AppContext) -> None:
     def repository_scan(repo_id: str, ref: str = "main") -> ScanResult:
         """Scan a repository at ``ref`` and persist symbols/modules to the store.
 
-        Fetches the latest commit, resolves it to a full SHA, runs the Python
-        AST analyzer, then detects candidate modules. Automatically builds
-        the RAG semantic index for the scanned contracts. Returns a summary
-        plus the module list. Requires ``repository_register`` first.
+        Fetches the latest commit, resolves it to a full SHA, runs the
+        language analyzers (Python, C/C++/CUDA, Dockerfile), then detects
+        candidate modules. Automatically builds the RAG semantic index for
+        the scanned contracts. Returns a summary plus the module list.
+        Requires ``repository_register`` first.
         """
         ctx.provider.fetch(repo_id)
         commit = ctx.provider.resolve_commit(repo_id, ref)

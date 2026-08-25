@@ -1,10 +1,16 @@
-"""Repository scan orchestration: files -> AST -> SQLite."""
+"""Repository scan orchestration: files -> analyzer -> SQLite.
+
+Language-agnostic: files are classified by name (see
+``git_asset_mcp.analyzers.classify_file``) and dispatched to the matching
+analyzer, so a single scan covers Python, C/C++/CUDA and Dockerfiles.
+"""
 from __future__ import annotations
 
 import datetime
 import uuid
 
-from git_asset_mcp.analyzers.python.ast_parser import ParseError, analyze_source
+from git_asset_mcp.analyzers import analyze_source, classify_file
+from git_asset_mcp.analyzers.models import ParseError
 from git_asset_mcp.providers.base import RepositoryProvider
 from git_asset_mcp.store.database import Database
 
@@ -38,13 +44,17 @@ def scan_repository(
     scan_id = str(uuid.uuid4())
 
     entries = provider.ls_tree(repo_id, commit)
-    py_files = [e for e in entries if e[0].endswith(".py")]
+    supported = [
+        (path, sha, lang)
+        for path, sha in entries
+        if (lang := classify_file(path)) is not None
+    ]
 
     files_ok = 0
     files_failed = 0
     symbols_total = 0
 
-    for path, blob_sha in py_files:
+    for path, blob_sha, language in supported:
         if is_test_file(path) or is_generated_file(path):
             continue
         source = provider.read_blob(repo_id, blob_sha)
@@ -57,7 +67,7 @@ def scan_repository(
             commit_sha=commit,
             path=path,
             blob_sha=blob_sha,
-            language="python",
+            language=language,
             size_bytes=size,
             is_test=False,
             parse_status="pending",
@@ -68,7 +78,7 @@ def scan_repository(
         except ParseError:
             db.insert_file(
                 repo_id=repo_id, commit_sha=commit, path=path, blob_sha=blob_sha,
-                language="python", size_bytes=size, is_test=False, parse_status="failed",
+                language=language, size_bytes=size, is_test=False, parse_status="failed",
             )
             files_failed += 1
             continue
@@ -105,7 +115,7 @@ def scan_repository(
 
         db.insert_file(
             repo_id=repo_id, commit_sha=commit, path=path, blob_sha=blob_sha,
-            language="python", size_bytes=size, is_test=False, parse_status="ok",
+            language=language, size_bytes=size, is_test=False, parse_status="ok",
         )
         files_ok += 1
 
@@ -115,7 +125,7 @@ def scan_repository(
         "scan_id": scan_id,
         "repo_id": repo_id,
         "commit": commit,
-        "files_total": len(py_files),
+        "files_total": len(supported),
         "files_ok": files_ok,
         "files_failed": files_failed,
         "symbols_total": symbols_total,

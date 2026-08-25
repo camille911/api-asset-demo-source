@@ -20,6 +20,10 @@ dependencies = [
     "setuptools>=68",
     # RAG 语义检索：numpy 是核心依赖；sentence-transformers 为可选重型依赖
     "numpy>=1.26",
+    # 多语言解析器：C/C++/CUDA（tree-sitter-cpp）。注意版本配对：runtime 须与
+    # tree-sitter-cpp 0.23.x 同代（tree-sitter 0.24+ ABI 不兼容会导致解析大文件 segfault）。
+    "tree-sitter>=0.23,<0.24",
+    "tree-sitter-cpp>=0.23,<0.25",
 ]
 
 [project.optional-dependencies]

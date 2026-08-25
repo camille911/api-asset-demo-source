@@ -1,13 +1,13 @@
 # git-asset-api-mcp-base
 
-MCP 基础组件：扫描 Git 仓库代码资产，把可复用的业务函数（Python）打包成独立 HTTP API（wheel），并提供**契约语义检索（RAG）**让大模型"先检索定位、命中即复用、未命中再打包"。
+MCP 基础组件：扫描 Git 仓库代码资产（Python / C / C++ / CUDA / Dockerfile），把可复用的业务函数打包成独立 HTTP API（wheel），并提供**契约语义检索（RAG）**让大模型"先检索定位、命中即复用、未命中再打包"。
 
 ## 核心能力
 
 | 能力 | 说明 |
 |---|---|
 | 仓库管理 | 注册 Git 仓库（GitHub HTTPS / 本地路径），只读 bare 镜像，commit 固定，增量 fetch；认证走 Basic auth（兼容 `ghp_` / `github_pat_` / `gho_`） |
-| 代码扫描 | AST 提取函数/类/导入/调用关系，符号来源追踪（repo + commit + blob sha），SQLite 落库 |
+| 代码扫描 | 多语言分析器提取符号/导入/调用关系（Python AST；C/C++/CUDA tree-sitter；Dockerfile 指令），符号来源追踪（repo + commit + blob sha），SQLite 落库 |
 | API 提案 | 从模块 public 入口生成提案（`proposed`），支持 `entry_symbol` 指定入口函数；必须显式 `approve` 才能打包（人在回路确认点） |
 | API 打包 | **文件级闭包**（入口文件 + `__init__.py` + AST 同包 import 递归）→ 生成 FastAPI 服务（稳定 Schema + Adapter）→ wheel；wheel 内置最小 `__init__.py`，避免原包 re-export 触发全量依赖；含 OpenAPI、Contract Hash、Implementation Hash、来源溯源（provenance） |
 | 判别重复 | 入口符号来源已由其他资产覆盖时，拒绝重复打包 |
@@ -24,6 +24,18 @@ MCP 基础组件：扫描 Git 仓库代码资产，把可复用的业务函数�
 ```
 
 RAG 是旁路加速：**wheel 打包逻辑不变**，只是把"每次复用都重新打包"优化为"索引命中即取现成产物"。
+
+## 支持语言
+
+| 语言 | 文件类型 | 分析器 | 提取内容 |
+|---|---|---|---|
+| Python | `.py` | 标准库 `ast` | 函数/类/方法、import 边、调用边 |
+| C / C++ / CUDA | `.c` `.h` `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` `.cu` `.cuh` | tree-sitter-cpp | 函数/方法/类/结构体/命名空间/枚举、`#include` 边、调用边 |
+| Dockerfile | `Dockerfile` `Dockerfile.*` `*.dockerfile` | 行解析器（无额外依赖） | 每条构建指令（FROM/RUN/COPY/CMD 等）作为符号 |
+
+- 扫描时按文件名自动路由到对应分析器，`files_total` 统计所有支持语言的文件；
+- 测试文件（`test_*` / `*_test.py` / `tests/` 等）与生成物（`__pycache__` / `build/` / `dist/` 等）自动跳过；
+- RAG 契约索引覆盖全部支持语言，`language` 字段记录真实来源语言。
 
 ## MCP 工具（13 个）
 
@@ -111,7 +123,7 @@ git-asset-mcp serve --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 src/git_asset_mcp/
 ├── providers/     # Git 仓库抽象（GitHub / 本地）
-├── analyzers/     # Python AST 扫描与模块识别
+├── analyzers/     # 多语言分析器（python / cpp / dockerfile）与模块识别
 ├── rag/           # 契约 RAG：抽取 / 切块 / embedding / 索引 / 检索
 ├── store/         # SQLite 存储（含 rag_contracts / rag_chunks 表）
 ├── proposal/      # API 提案

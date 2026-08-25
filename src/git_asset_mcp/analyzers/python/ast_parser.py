@@ -6,47 +6,24 @@ so call edges that cannot be statically resolved are marked ``inferred=True``.
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass, field
 
+# Data model lives in the shared analyzers.models module; re-exported here for
+# backward compatibility with code importing from analyzers.python.ast_parser.
+from git_asset_mcp.analyzers.models import (
+    CallEdge,
+    FileAnalysis,
+    ImportEdge,
+    ParseError,
+    Symbol,
+)
 
-@dataclass
-class Symbol:
-    qualified_name: str
-    symbol_type: str  # module | class | function | method | async_function
-    signature: str
-    start_line: int
-    end_line: int
-    docstring: str = ""
-    decorators: list[str] = field(default_factory=list)
-    params: list[str] = field(default_factory=list)
-    return_annotation: str = ""
-
-
-@dataclass
-class ImportEdge:
-    module: str
-    names: list[str] = field(default_factory=list)
-    line: int = 0
-
-
-@dataclass
-class CallEdge:
-    caller: str
-    callee: str
-    line: int = 0
-    inferred: bool = False
-
-
-@dataclass
-class FileAnalysis:
-    path: str
-    symbols: list[Symbol] = field(default_factory=list)
-    imports: list[ImportEdge] = field(default_factory=list)
-    calls: list[CallEdge] = field(default_factory=list)
-
-
-class ParseError(Exception):
-    pass
+__all__ = [
+    "Symbol",
+    "ImportEdge",
+    "CallEdge",
+    "FileAnalysis",
+    "ParseError",
+]
 
 
 def _module_name_from_path(path: str) -> str:

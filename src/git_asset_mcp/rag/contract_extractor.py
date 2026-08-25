@@ -45,24 +45,33 @@ def _artifact_wheel_path(artifact: dict, api_name: str | None) -> str | None:
 
 
 def extract_contracts(
-    db: Database, repo_id: str, commit: str, language: str = "python",
+    db: Database, repo_id: str, commit: str, language: str | list[str] | None = None,
 ) -> list[dict]:
     """Extract API-level contracts from scanned symbols.
 
-    Returns a list of contract dicts, each describing one public function
-    together with provenance (source path, module, signature, docstring)
-    and, when available, the built artifact (artifact_id, wheel_path,
-    contract_hash) that covers this symbol.
+    ``language`` filters by the file's stored language: pass ``None`` to index
+    every supported language (default), a single language name, or a list of
+    names. Each contract carries the true ``language`` of its source file.
     """
+    lang_clause = ""
+    params: list = [repo_id, commit]
+    if isinstance(language, str):
+        lang_clause = " AND f.language = ?"
+        params.append(language)
+    elif isinstance(language, (list, tuple)) and language:
+        lang_clause = f" AND f.language IN ({','.join('?' * len(language))})"
+        params.extend(language)
+
     rows = db._conn.execute(
-        """
-        SELECT s.qualified_name, s.symbol_type, s.signature, s.docstring, f.path
+        f"""
+        SELECT s.qualified_name, s.symbol_type, s.signature, s.docstring, f.path, f.language
         FROM symbols s
         JOIN files f ON s.file_id = f.file_id
         WHERE f.repo_id = ? AND f.commit_sha = ?
           AND s.symbol_type != 'module'
+          {lang_clause}
         """,
-        (repo_id, commit),
+        params,
     ).fetchall()
 
     artifacts = db._conn.execute(
@@ -100,7 +109,7 @@ def extract_contracts(
                 "path": r["path"],
                 "signature": r["signature"] or "",
                 "docstring": r["docstring"] or "",
-                "language": language,
+                "language": r["language"] or (language if isinstance(language, str) else "") or "python",
                 "contract_json": None,
                 "artifact_id": art["artifact_id"] if art else None,
                 "wheel_path": _artifact_wheel_path(art, art.get("api_name")) if art else None,

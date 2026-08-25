@@ -22,11 +22,13 @@ def index_repository(
     repo_id: str,
     commit: str,
     embedder: Embedder | None = None,
-    language: str = "python",
+    language: str | list[str] | None = None,
 ) -> dict:
     """Build (or rebuild) the RAG index for one scanned commit.
 
-    Returns statistics: contracts indexed, chunks stored.
+    ``language`` filters which source languages are indexed; ``None`` indexes
+    all supported languages found in the scan. Returns statistics: contracts
+    indexed, chunks stored.
     """
     embedder = embedder or Embedder()
     contracts = extract_contracts(db, repo_id, commit, language)

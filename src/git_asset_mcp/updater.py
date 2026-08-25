@@ -1,6 +1,7 @@
 """Incremental update: detect changes and plan version bumps (task book 13-14)."""
 from __future__ import annotations
 
+from git_asset_mcp.analyzers import classify_file
 from git_asset_mcp.packagers.fastapi.contract import contract_hash
 from git_asset_mcp.packagers.fastapi.generator import _minimal_openapi
 from git_asset_mcp.proposal.proposer import propose_api
@@ -32,7 +33,7 @@ def update_check(provider: RepositoryProvider, db: Database, repo_id: str, ref: 
     for c in changes:
         by_status.setdefault(c.status, []).append(c.path)
 
-    affected_modules = sorted({_module_of(c.path) for c in changes if c.path.endswith(".py")})
+    affected_modules = sorted({_module_of(c.path) for c in changes if classify_file(c.path)})
     affected_artifacts = _affected_artifacts(db, repo_id, [c.path for c in changes])
 
     return {
