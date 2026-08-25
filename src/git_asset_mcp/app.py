@@ -21,6 +21,7 @@ class AppContext:
             data_dir=settings.data_dir,
             token=settings.github_token,
             allowed_hosts=settings.allowed_hosts,
+            allow_local_paths=settings.allow_local_paths,
         )
         db = Database(settings.data_dir / "metadata.db")
         return cls(settings=settings, provider=provider, db=db)

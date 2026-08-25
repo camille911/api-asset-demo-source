@@ -29,6 +29,9 @@ class Settings:
     max_file_bytes: int = 2 * 1024 * 1024
     max_repo_bytes: int = 200 * 1024 * 1024
     allowed_hosts: tuple[str, ...] = ("github.com",)
+    # 允许注册本地路径仓库（内网/本地扫描）。默认关闭；开启后 register
+    # 跳过 URL 白名单校验，直接以路径/URL 作为 git 源。
+    allow_local_paths: bool = False
 
     @classmethod
     def from_config(cls, config_path: str | Path | None = None) -> "Settings":
@@ -59,6 +62,7 @@ class Settings:
             max_file_bytes=int(_env("MAX_FILE_BYTES", raw.get("max_file_bytes", 2 * 1024 * 1024))),
             max_repo_bytes=int(_env("MAX_REPO_BYTES", raw.get("max_repo_bytes", 200 * 1024 * 1024))),
             allowed_hosts=tuple(raw.get("allowed_hosts", ["github.com"])),
+            allow_local_paths=_to_bool(_env("ALLOW_LOCAL_PATHS", raw.get("allow_local_paths", False))),
         )
 
 
