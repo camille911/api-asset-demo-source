@@ -418,7 +418,11 @@ class Database:
     def link_contracts_to_artifact(
         self, repo_id: str, symbols: set[str], artifact_id: str, wheel_path: str
     ) -> int:
-        """把一组符号的 RAG 契约关联到打包产物（wheel 已可用）。"""
+        """把一组符号的 RAG 契约关联到打包产物（wheel 已可用）。
+
+        同名函数的多副本契约（如 archive/ 与 kt-sft/ 双版本）内容一致，
+        一并关联到该产物，避免 RAG 命中副本时误判"未打包"。
+        """
         if not symbols:
             return 0
         placeholders = ",".join("?" for _ in symbols)
@@ -429,6 +433,14 @@ class Database:
             """,
             (artifact_id, wheel_path, repo_id, *sorted(symbols)),
         )
+        # 同名副本（leaf 后缀匹配）也关联——多语言/多副本仓库的重复代码
+        leaves = {s.split(".")[-1] for s in symbols}
+        for leaf in leaves:
+            self._conn.execute(
+                "UPDATE rag_contracts SET artifact_id = ?, wheel_path = ? "
+                "WHERE repo_id = ? AND symbol_qname LIKE ?",
+                (artifact_id, wheel_path, repo_id, "%." + leaf),
+            )
         self._conn.commit()
         return cur.rowcount
 
