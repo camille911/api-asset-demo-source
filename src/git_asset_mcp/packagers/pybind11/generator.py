@@ -185,6 +185,23 @@ def build_cpp_artifact(
     (artifact_dir / "source-provenance.json").write_text(
         json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # 登记到 artifacts 表（与 fastapi 打包器一致，供查询/RAG 联动）
+    import datetime
+    artifact_id = f"{proposal.proposal_id}:{version}"
+    ihash = _stable_hash(provenance)
+    db.insert_artifact(
+        artifact_id=artifact_id,
+        proposal_id=proposal.proposal_id,
+        semantic_version=version,
+        source_commit=commit or "",
+        contract_hash=chash,
+        implementation_hash=ihash,
+        artifact_path=str(artifact_dir),
+        verification_status="unverified",
+        created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        entry_symbols=sorted(proposal.entry_symbols),
+    )
+
     # sdist 构建（无编译；客户侧 pip install 时编译）
     dist_path: str = ""
     if build_sdist:
