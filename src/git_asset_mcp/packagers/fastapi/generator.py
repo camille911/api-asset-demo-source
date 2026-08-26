@@ -333,6 +333,11 @@ def build_artifact(
         entry_symbols=sorted(proposal.entry_symbols),
     )
 
+    # 闭包包含入口文件全部函数 → 关联这些符号的 RAG 契约到产物
+    if wheel_path and commit:
+        file_syms = db.get_functions_in_file(repo_id, commit, entry_path)
+        db.link_contracts_to_artifact(repo_id, file_syms, artifact_id, wheel_path)
+
     return {
         "artifact_id": artifact_id,
         "artifact_path": str(artifact_dir),

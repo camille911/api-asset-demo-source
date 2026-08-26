@@ -400,6 +400,38 @@ class Database:
         ).fetchall()
         return {r["path"] for r in rows}
 
+    def get_functions_in_file(self, repo_id: str, commit_sha: str, path: str) -> set[str]:
+        """入口文件内的全部公开函数符号（打包闭包包含入口文件，
+        故这些符号的契约都应关联到该产物，供 RAG 命中后直接复用）。"""
+        rows = self._conn.execute(
+            r"""
+            SELECT s.qualified_name FROM symbols s
+            JOIN files f ON s.file_id = f.file_id
+            WHERE f.repo_id = ? AND f.commit_sha = ? AND f.path = ?
+              AND s.symbol_type = 'function'
+              AND s.qualified_name NOT LIKE '%.\_%' ESCAPE '\'
+            """,
+            (repo_id, commit_sha, path),
+        ).fetchall()
+        return {r[0] for r in rows}
+
+    def link_contracts_to_artifact(
+        self, repo_id: str, symbols: set[str], artifact_id: str, wheel_path: str
+    ) -> int:
+        """把一组符号的 RAG 契约关联到打包产物（wheel 已可用）。"""
+        if not symbols:
+            return 0
+        placeholders = ",".join("?" for _ in symbols)
+        cur = self._conn.execute(
+            f"""
+            UPDATE rag_contracts SET artifact_id = ?, wheel_path = ?
+            WHERE repo_id = ? AND symbol_qname IN ({placeholders})
+            """,
+            (artifact_id, wheel_path, repo_id, *sorted(symbols)),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
     def get_symbol_signature(self, repo_id: str, commit_sha: str, qualified_name: str) -> str | None:
         row = self._conn.execute(
             """

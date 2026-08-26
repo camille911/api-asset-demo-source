@@ -259,6 +259,12 @@ def build_cpp_artifact(
         if sdists:
             dist_path = str(sdists[-1])
 
+    # 闭包包含入口文件全部函数（目录级闭包含更多文件，此处关联入口
+    # 文件内的函数；RAG 命中这些函数即可直达该产物）
+    if dist_path and commit:
+        file_syms = db.get_functions_in_file(repo_id, commit, entry_path)
+        db.link_contracts_to_artifact(repo_id, file_syms, artifact_id, dist_path)
+
     return {
         "artifact_id": f"{proposal.proposal_id}:{version}",
         "artifact_path": str(artifact_dir),
