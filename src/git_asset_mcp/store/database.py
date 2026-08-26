@@ -375,6 +375,17 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
+    def list_artifacts(self) -> list[dict]:
+        rows = self._conn.execute("SELECT * FROM artifacts").fetchall()
+        return [dict(r) for r in rows]
+
+    def update_artifact_path(self, artifact_id: str, artifact_path: str) -> None:
+        self._conn.execute(
+            "UPDATE artifacts SET artifact_path = ? WHERE artifact_id = ?",
+            (artifact_path, artifact_id),
+        )
+        self._conn.commit()
+
     def source_paths_for_symbols(self, repo_id: str, symbols: set[str]) -> set[str]:
         if not symbols:
             return set()

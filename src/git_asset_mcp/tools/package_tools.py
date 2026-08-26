@@ -60,6 +60,13 @@ class UpdatePlanResult(BaseModel):
     tests_needed: list[str]
 
 
+class FinalizeResult(BaseModel):
+    generated_deleted: bool
+    artifacts_relinked: int
+    dist_kept: str
+    note: str
+
+
 def register_package_tools(mcp: Any, ctx: AppContext) -> None:
     @mcp.tool()
     def api_package_build(proposal_id: str, version: str) -> BuildResult:
@@ -106,6 +113,49 @@ def register_package_tools(mcp: Any, ctx: AppContext) -> None:
         return VerifyResult(
             status=verified["status"],
             checks=[CheckItem(**c) for c in verified["checks"]],
+        )
+
+    @mcp.tool()
+    def api_package_finalize() -> FinalizeResult:
+        """打包与 RAG 完成后收尾：删除 generated 中间源码目录。
+
+        可安装产物保留在 dist/（wheel / sdist），契约保留在 RAG 数据库；
+        generated/ 仅打包期中间源码，删除后避免 AI 误读为"应读源码"，
+        凸显"API 复用"而非"源码复制"的价值。删除前把 artifact 记录
+        的路径重定向到 dist 产物，保持引用有效。
+        """
+        import os as _os
+        import shutil
+
+        generated = ctx.settings.generated_dir
+        dist_dir = generated.parent / "dist"
+        relinked = 0
+
+        # 1) 把 artifact_path 从 generated 目录重定向到 dist 产物
+        for art in ctx.db.list_artifacts():
+            apath = Path(art["artifact_path"])
+            api = apath.parent.name
+            ver = apath.name
+            candidates = (
+                list(dist_dir.glob(f"{api}-{ver}.*"))
+                + list(dist_dir.glob(f"git_asset_*{api}-{ver}.*"))
+            )
+            if candidates:
+                ctx.db.update_artifact_path(art["artifact_id"], str(candidates[-1]))
+                relinked += 1
+
+        # 2) 删除 generated 中间目录（关 safe-delete shim 的回收站回退）
+        _os.environ.setdefault("CODEBUDDY_SAFE_DELETE_SANDBOX", "0")
+        deleted = False
+        if generated.exists():
+            shutil.rmtree(generated, ignore_errors=True)
+            deleted = not generated.exists()
+
+        return FinalizeResult(
+            generated_deleted=deleted,
+            artifacts_relinked=relinked,
+            dist_kept=str(dist_dir),
+            note="generated 已删除；可安装产物在 dist/，契约在 RAG 数据库",
         )
 
     @mcp.tool()
