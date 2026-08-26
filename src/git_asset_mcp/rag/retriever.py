@@ -41,36 +41,64 @@ def search_vectors(
 
     Takes an already-embedded query vector so callers can measure the pure
     retrieval cost without the (fixed) embedding inference overhead.
-    """
-    where = "WHERE ch.embedding IS NOT NULL"
-    params: list = []
-    if repo_id:
-        where += " AND rc.repo_id = ?"
-        params.append(repo_id)
 
+    Performance: two-phase query — phase 1 loads only embeddings (light),
+    scores and picks top-k; phase 2 fetches full provenance for the few
+    hits. A small cache skips repeated full scans entirely.
+    """
+    global _MATRIX_CACHE
+    # 缓存：全量矩阵一次性加载后复用（索引重建时由 indexer 清缓存）
+    if _MATRIX_CACHE:
+        matrix, chunk_ids = _MATRIX_CACHE
+    else:
+        where = "WHERE ch.embedding IS NOT NULL"
+        params: list = []
+        if repo_id:
+            where += " AND rc.repo_id = ?"
+            params.append(repo_id)
+
+        # 阶段一：只取 embedding（轻量，不拉 content/docstring 大字段）
+        rows = db._conn.execute(
+            f"""
+            SELECT ch.chunk_id, ch.embedding
+            FROM rag_chunks ch
+            JOIN rag_contracts rc ON ch.contract_id = rc.contract_id
+            {where}
+            """,
+            params,
+        ).fetchall()
+        if not rows:
+            return []
+        # 一次性字节拼接构造矩阵（避免逐行 vstack 的 Python 开销）
+        chunk_ids = [r[0] for r in rows]
+        flat = b"".join(bytes(r[1]) for r in rows)
+        matrix = np.frombuffer(flat, dtype=np.float32).reshape(len(rows), -1)
+        _MATRIX_CACHE = (matrix, chunk_ids)
+
+    scores = matrix @ qvec  # 已归一化 -> 点积即余弦
+    order = np.argsort(-scores)[:top_k]
+
+    # 阶段二：只取 top-k 的完整溯源
+    placeholders = ",".join("?" for _ in order)
     rows = db._conn.execute(
         f"""
-        SELECT ch.chunk_id, ch.content, ch.embedding,
+        SELECT ch.chunk_id, ch.content,
                rc.contract_id, rc.symbol_qname, rc.module_name, rc.api_name,
                rc.path, rc.signature, rc.docstring, rc.artifact_id,
                rc.wheel_path, rc.contract_hash, rc.repo_id, rc.commit_sha
         FROM rag_chunks ch
         JOIN rag_contracts rc ON ch.contract_id = rc.contract_id
-        {where}
+        WHERE ch.chunk_id IN ({placeholders})
         """,
-        params,
+        [chunk_ids[int(i)] for i in order],
     ).fetchall()
+    by_id = {r[0]: r for r in rows}
 
-    if not rows:
-        return []
-
-    matrix = np.vstack([np.frombuffer(r["embedding"], dtype=np.float32) for r in rows])
-    scores = matrix @ qvec  # 已归一化 -> 点积即余弦
-
-    order = np.argsort(-scores)[:top_k]
     hits: list[dict] = []
     for pos in order:
-        r = rows[int(pos)]
+        r = by_id.get(chunk_ids[int(pos)])
+        if r is None:
+            continue
         hits.append(
             {
                 "score": round(float(scores[pos]), 4),
@@ -93,6 +121,16 @@ def search_vectors(
             }
         )
     return hits
+
+
+# 向量矩阵缓存（索引重建后由 clear_cache() 失效；命中即跳过全量扫描）
+_MATRIX_CACHE: tuple | None = None
+
+
+def clear_cache() -> None:
+    """索引重建后调用：丢弃缓存的向量矩阵。"""
+    global _MATRIX_CACHE
+    _MATRIX_CACHE = None
 
 
 def index_stats(db: Database) -> dict:

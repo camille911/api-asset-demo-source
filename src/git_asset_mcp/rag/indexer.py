@@ -35,6 +35,8 @@ def index_repository(
 
     # 幂等：先清掉该 commit 的旧索引（contracts + chunks 一起删），立即提交，
     # 避免与后续 INSERT 在同一事务内导致 UNIQUE 冲突判定失败。
+    from git_asset_mcp.rag.retriever import clear_cache
+    clear_cache()
     db._conn.execute(
         """
         DELETE FROM rag_chunks
