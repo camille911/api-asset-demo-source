@@ -68,8 +68,15 @@ def _closure_info(entry_path: str) -> tuple[str, str, str]:
     """
     parts = entry_path.replace("\\", "/").split("/")
     pkg_dir = "/".join(parts[:-1])
-    package_name = pkg_dir.split("/")[-1]
     filename = parts[-1]
+    if not pkg_dir:
+        # 根目录文件（如仓库根 ktransformers.py）：pkg_dir 用 "." 标记，
+        # 闭包收集根文件；import_module 直接用文件名（无包前缀）
+        package_name = ""
+        submodule = "" if filename == "__init__.py" else (filename[:-3] if filename.endswith(".py") else filename)
+        import_module = submodule or "root"
+        return ".", package_name, import_module
+    package_name = pkg_dir.split("/")[-1]
     # __init__.py 作为入口时，import 目标是包本身（openai），而非 openai.__init__
     if filename == "__init__.py":
         submodule = ""
@@ -142,8 +149,10 @@ def _package_closure(
     """
     tree: dict[str, tuple[str, str]] = {}
     for path, blob_sha in provider.ls_tree(repo_id, commit):
-        if path.startswith(pkg_dir + "/") and path.endswith(".py"):
-            tree[path] = (provider.read_blob(repo_id, blob_sha), blob_sha)
+        # pkg_dir == "." 表示根目录模块：收集仓库根文件
+        if (pkg_dir == "." and "/" not in path) or (pkg_dir != "." and path.startswith(pkg_dir + "/")):
+            if path.endswith(".py"):
+                tree[path] = (provider.read_blob(repo_id, blob_sha), blob_sha)
 
     want: set[str] = {entry_path}
     queue = [entry_path]

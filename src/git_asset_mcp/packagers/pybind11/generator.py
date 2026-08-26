@@ -61,17 +61,29 @@ def _render_binding(func_name: str, signature: str, entry_path: str) -> str:
     )
 
 
-def _render_setup(package_name: str, func_name: str, sources: list[str]) -> str:
+def _render_setup(package_name: str, func_name: str, sources: list[str],
+                  binding_module: str | None = None) -> str:
+    """setup.py for the C++/CUDA binding package.
+
+    ``binding_module``: when the entry symbol is a PYBIND11_MODULE macro,
+    the source file already defines the module (PYBIND11_MODULE(name, m)) —
+    compile it directly instead of generating a wrapper.
+    """
     src_lines = "\n".join(f'        "src/{s}",' for s in sources)
+    if binding_module:
+        ext_name = f"{package_name}.{binding_module}"
+        ext_sources = src_lines  # 源绑定文件自带 PYBIND11_MODULE 定义
+    else:
+        ext_name = f"{package_name}.bind_{func_name}"
+        ext_sources = f'            "bind/bind_{func_name}.cpp",\n{src_lines}'
     return (
         "from setuptools import setup, Extension\n"
         "import pybind11\n\n"
-        f"ext_modules = [\n"
+        "ext_modules = [\n"
         "    Extension(\n"
-        f'        "{package_name}.bind_{func_name}",\n'
+        f'        "{ext_name}",\n'
         "        [\n"
-        f"            \"bind/bind_{func_name}.cpp\",\n"
-        f"{src_lines}\n"
+        f"{ext_sources}\n"
         "        ],\n"
         '        include_dirs=[pybind11.get_include(), "src"],\n'
         "        language=\"c++\",\n"
@@ -108,14 +120,6 @@ def build_cpp_artifact(
     if proposal.status != "approved":
         raise RuntimeError("proposal_not_approved")
 
-    artifact_dir = generated_dir / proposal.api_name / version
-    if artifact_dir.exists():
-        raise RuntimeError("version_exists")
-
-    existing = db.find_artifact_by_symbols([proposal.entry_symbols[0]])
-    if existing and existing.get("module_id") != proposal.module_id:
-        raise RuntimeError(f"duplicate_asset: already covered by {existing['artifact_id']}")
-
     repo_id = proposal.module_id.split(":", 1)[0]
     commit = proposal.source_paths and _commit_for(db, repo_id)
 
@@ -123,16 +127,43 @@ def build_cpp_artifact(
     entry_paths = db.source_paths_for_symbols(repo_id, {entry_qname})
     entry_path = next(iter(sorted(entry_paths))) if entry_paths else proposal.source_paths[0]
     func_name = entry_qname.split(".")[-1]
+
+    # duplicate 检查：绑定宏入口（PYBIND11_MODULE）同名 qname 会命中大模块
+    # artifact 的过宽 entry_symbols，误判重复——跳过（由 version_exists 去重）。
+    if func_name != "PYBIND11_MODULE":
+        existing = db.find_artifact_by_symbols([entry_qname])
+        if existing and existing.get("module_id") != proposal.module_id:
+            raise RuntimeError(f"duplicate_asset: already covered by {existing['artifact_id']}")
+
     signature = db.get_symbol_signature(repo_id, commit or "", entry_qname) or ""
 
     closure = _cpp_closure(provider, repo_id, commit or "", entry_path)
     if not closure:
         raise RuntimeError(f"empty_cpp_closure: no C/CUDA files under {entry_path}")
 
-    package_name = f"git_asset_{func_name}"
+    # 绑定宏入口（PYBIND11_MODULE）：源文件自带模块定义，直接编译该绑定模块
+    binding_module: str | None = None
+    if func_name == "PYBIND11_MODULE":
+        entry_src = closure.get(entry_path, ("", ""))[0]
+        import re as _re
+        m = _re.search(r"PYBIND11_MODULE\((\w+),\s*\w+\)", entry_src)
+        if m:
+            binding_module = m.group(1)
+            package_name = f"git_asset_{binding_module}"
+            # api_name 用绑定模块名（目录/产物名唯一，避免同名 PYBIND11_MODULE 冲突）
+            proposal.api_name = binding_module
+        else:
+            raise RuntimeError(f"cannot parse PYBIND11_MODULE name in {entry_path}")
+    else:
+        package_name = f"git_asset_{func_name}"
     sources = sorted(f for f in closure if Path(f).suffix.lower() in (".cpp", ".cc", ".cxx", ".cu"))
     if not sources:
         sources = [entry_path]  # 纯头文件内核：至少包含入口文件
+
+    # api_name 已最终确定（绑定宏模式下被覆盖为绑定模块名），此时才计算产物目录
+    artifact_dir = generated_dir / proposal.api_name / version
+    if artifact_dir.exists():
+        raise RuntimeError("version_exists")
 
     artifact_dir.mkdir(parents=True, exist_ok=False)
     (artifact_dir / "src").mkdir()
@@ -147,10 +178,18 @@ def build_cpp_artifact(
         target.write_text(source, encoding="utf-8", errors="ignore")
         blob_shas.append(blob_sha)
 
-    (artifact_dir / "bind" / f"bind_{func_name}.cpp").write_text(
-        _render_binding(func_name, signature, entry_path), encoding="utf-8")
+    if binding_module:
+        # 绑定宏模式：不生成 wrapper，直接编译源绑定文件
+        bind_file = artifact_dir / "bind" / "_binding_note.txt"
+        bind_file.write_text(
+            f"Entry {entry_path} defines PYBIND11_MODULE({binding_module}); "
+            "compiled directly from src. No generated wrapper needed.\n",
+            encoding="utf-8")
+    else:
+        (artifact_dir / "bind" / f"bind_{func_name}.cpp").write_text(
+            _render_binding(func_name, signature, entry_path), encoding="utf-8")
     (artifact_dir / "setup.py").write_text(
-        _render_setup(package_name, func_name, sources), encoding="utf-8")
+        _render_setup(package_name, func_name, sources, binding_module), encoding="utf-8")
     (artifact_dir / "pyproject.toml").write_text(_render_pyproject(), encoding="utf-8")
     (artifact_dir / package_name).mkdir(exist_ok=True)
     (artifact_dir / package_name / "__init__.py").write_text(

@@ -83,7 +83,7 @@ def propose_api(
     entries = [
         dict(r) for r in rows
         if _public_entry(r["symbol_type"], r["qualified_name"])
-        and module_name in r["qualified_name"]
+        and _in_module(r["path"], module_name)
     ]
     if not entries:
         raise ValueError(f"no public entry symbols found for module {module_name!r}")
@@ -113,3 +113,16 @@ def propose_api(
         status="proposed",
         requires_confirmation=True,
     )
+
+
+def _in_module(path: str, module_name: str) -> bool:
+    """模块边界判定：按文件路径前缀（模块名是父目录点号形式）。
+
+    原实现 ``module_name in qualified_name`` 是子串匹配，`archive` 这类
+    大模块会把 archive/ 下所有子模块符号吞进 entry_symbols，导致相邻
+    模块的 duplicate 检查误判。改用路径精确界定。
+    """
+    if module_name in (".", ""):
+        return "/" not in path  # 根目录模块：只收根文件
+    mod_dir = module_name.replace(".", "/")
+    return path == mod_dir or path.startswith(mod_dir + "/")
