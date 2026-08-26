@@ -1,6 +1,6 @@
 # git-asset-api-mcp-base
 
-MCP 基础组件：扫描 Git 仓库代码资产（Python / C / C++ / CUDA / Dockerfile），把可复用的业务函数打包成独立 HTTP API（wheel），并提供**契约语义检索（RAG）**让大模型"先检索定位、命中即复用、未命中再打包"。
+MCP 基础组件：扫描 Git 仓库代码资产（Python / C / C++ / CUDA / Dockerfile），把可复用的业务函数打包成**可安装产物**（Python → FastAPI 服务 wheel；C/C++/CUDA → pybind11 绑定源码包），并提供**契约语义检索（RAG）**让大模型"先检索定位、命中即复用、未命中再打包"。
 
 ## 核心能力
 
@@ -9,11 +9,25 @@ MCP 基础组件：扫描 Git 仓库代码资产（Python / C / C++ / CUDA / Doc
 | 仓库管理 | 注册 Git 仓库（GitHub HTTPS / 本地路径），只读 bare 镜像，commit 固定，增量 fetch；认证走 Basic auth（兼容 `ghp_` / `github_pat_` / `gho_`） |
 | 代码扫描 | 多语言分析器提取符号/导入/调用关系（Python AST；C/C++/CUDA tree-sitter；Dockerfile 指令），符号来源追踪（repo + commit + blob sha），SQLite 落库 |
 | API 提案 | 从模块 public 入口生成提案（`proposed`），支持 `entry_symbol` 指定入口函数；必须显式 `approve` 才能打包（人在回路确认点） |
-| API 打包 | **文件级闭包**（入口文件 + `__init__.py` + AST 同包 import 递归）→ 生成 FastAPI 服务（稳定 Schema + Adapter）→ wheel；wheel 内置最小 `__init__.py`，避免原包 re-export 触发全量依赖；含 OpenAPI、Contract Hash、Implementation Hash、来源溯源（provenance） |
-| 判别重复 | 入口符号来源已由其他资产覆盖时，拒绝重复打包 |
+| API 打包 | **按入口符号语言自动路由运行时**（调用方零切换）：Python → **FastAPI wheel**（文件级闭包 + 稳定 Schema + Adapter + OpenAPI + Contract/Implementation Hash + 溯源）；C/C++/CUDA → **pybind11 绑定源码包 sdist**（目录级全 C/CUDA 闭包 + 绑定骨架，客户机 `pip install` 时编译） |
+| 判别重复 | 按实际入口符号判定：同一 API 已被打包则拒绝重复（仓库多副本代码自动去重，如 `archive/` 与 `kt-sft/` 双版本） |
 | 增量更新 | fetch → diff → 定位受影响模块 → 对比 Hash → 推荐 patch / minor / major（破坏性变化拦覆盖） |
 | **契约 RAG** | 契约单独抽取 → API 级 chunk 切块 → 语义向量索引；`asset_rag_search` 自然语言检索（含中文），命中直接溯源到 wheel 路径 |
+| 收尾清理 | 打包 + RAG 完成后 `api_package_finalize` 删除中间源码目录（`generated/`），只保留可安装产物（`dist/`）与契约，避免 AI 误读源码、凸显 API 复用价值 |
 | 验证运行 | 动态加载生成 app，验证 import / health / metadata / openapi 及业务 endpoint |
+
+## 运行时适配（打包器注册表）
+
+```
+api_package_build(proposal_id)
+  └─ 按入口符号语言自动路由
+      ├─ language=python → packagers/fastapi   → FastAPI 服务 wheel（.whl，pip 即装即用）
+      └─ language=cpp    → packagers/pybind11  → pybind11 绑定源码包（.tar.gz sdist，客户机编译）
+```
+
+- C++/CUDA 产物含入口目录**全部 C/CUDA 源文件**（.h/.hpp/.cpp/.cu/.cuh…），绑定骨架 + setup.py + pyproject + 契约 + 溯源；
+- `PYBIND11_MODULE` 入口自动识别为**原生绑定模块**（api_name 用绑定名，如 `vLLMMarlin`），同名绑定副本自动去重；
+- 打包机无需编译器即可构建 sdist；客户机 `pip install` 时自动编译（需对应工具链：C++ 需 gcc/cl，CUDA 需 nvcc）。
 
 ## 工作流：先检索，后打包
 
@@ -37,19 +51,20 @@ RAG 是旁路加速：**wheel 打包逻辑不变**，只是把"每次复用都�
 - 测试文件（`test_*` / `*_test.py` / `tests/` 等）与生成物（`__pycache__` / `build/` / `dist/` 等）自动跳过；
 - RAG 契约索引覆盖全部支持语言，`language` 字段记录真实来源语言。
 
-## MCP 工具（13 个）
+## MCP 工具（14 个）
 
 | 工具 | 作用 |
 |---|---|
 | `ping` / `server_info` | 存活与版本信息 |
-| `repository_register` | 注册仓库（URL 校验 + Token 脱敏，Basic auth 克隆） |
+| `repository_register` | 注册仓库（URL 校验 + Token 脱敏，Basic auth 克隆；`ALLOW_LOCAL_PATHS=1` 时接受本地路径） |
 | `repository_scan` | 扫描符号/模块，**自动构建 RAG 索引**（模型缺失降级不阻断） |
-| `repository_update_check` / `update_plan` | 增量变更检测与升级计划 |
+| `repository_update_check` / `api_update_plan` | 增量变更检测与升级计划 |
 | `module_list` | 列出已扫描模块与入口符号 |
 | `api_proposal_create` | 生成 API 提案（`entry_symbol` 可选，缺省取模块第一个公开函数） |
 | `api_proposal_approve` | 批准/拒绝提案（批准后才能打包） |
-| `api_package_build` | 文件级闭包打包 wheel（构建隔离于 OS temp，兼容沙箱环境） |
+| `api_package_build` | 打包（**按入口语言自动选运行时**：Python→FastAPI wheel，C++/CUDA→pybind11 sdist；构建隔离于 OS temp） |
 | `api_package_verify` | 验证制品（import / health / metadata / openapi） |
+| `api_package_finalize` | **收尾**：删除 `generated/` 中间源码（产物引用重定向到 dist），保留可安装产物与 RAG 契约 |
 | `asset_rag_search` | **语义检索**契约索引，返回 top-k + 全链溯源（契约/artifact/wheel/commit） |
 | `asset_rag_status` | RAG 索引统计（contracts / chunks / repositories） |
 
@@ -98,9 +113,10 @@ git-asset-mcp serve --transport streamable-http --host 127.0.0.1 --port 8000
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `DATA_DIR` | 数据目录（SQLite + 仓库镜像） | `./data` |
-| `GENERATED_DIR` | 业务制品目录（FastAPI 应用 + 契约 + 源码闭包）；wheel 统一输出到其父目录 `dist/` | `./generated` |
+| `GENERATED_DIR` | 打包中间目录（FastAPI 应用 / 绑定包 + 契约 + 源码闭包）；wheel/sdist 统一输出到其父目录 `dist/`；打包 + RAG 完成后可用 `api_package_finalize` 清理 | `./generated` |
 | `LOG_DIR` | 日志目录 | `./logs` |
 | `GITHUB_TOKEN` | GitHub 访问 Token（公开仓库可留空，走系统凭据链） | 空 |
+| `ALLOW_LOCAL_PATHS` | 允许注册本地路径仓库（内网/本地扫描；开启后跳过 URL 白名单校验） | `false` |
 | `RAG_EMBED_MODEL` | embedding 模型（本地路径或 HF 仓库名） | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
 | `RAG_MODELS_DIR` | 本地模型目录 | `~/.git-asset/models` |
 
@@ -127,8 +143,8 @@ src/git_asset_mcp/
 ├── rag/           # 契约 RAG：抽取 / 切块 / embedding / 索引 / 检索
 ├── store/         # SQLite 存储（含 rag_contracts / rag_chunks 表）
 ├── proposal/      # API 提案
-├── packagers/     # FastAPI 打包与验证
-├── tools/         # MCP 工具注册（含 rag_tools）
+├── packagers/     # 运行时适配器：fastapi/（Python wheel）+ pybind11/（C++/CUDA sdist）
+├── tools/         # MCP 工具注册（14 个，含 rag_tools 与打包/收尾工具）
 ├── server.py      # MCPServer 定义
 ├── cli.py         # serve / doctor / version
 └── settings.py    # 配置
